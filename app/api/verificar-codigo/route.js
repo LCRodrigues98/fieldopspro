@@ -25,15 +25,25 @@ export async function POST(req) {
     if (error || !data) return NextResponse.json({ error: 'Código inválido ou expirado' }, { status: 400 });
     await supabaseAdmin.from('email_verificacoes').update({ verificado: true }).eq('id', data.id);
 
-    // 2. Tenta criar usuário via signUp normal (NÃO via admin)
-    const { error: signUpError } = await supabaseAnon.auth.signUp({
+    // 2. Cria usuário no auth já confirmado. Se já existir, atualiza a senha
+    //    (o signUp anônimo ignora a senha nova quando o email já existe, o que
+    //    causa "Invalid login credentials" no login).
+    const { error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: emailLimpo,
       password: senha,
-      options: { data: { nome, empresa } }
+      email_confirm: true,
+      user_metadata: { nome, empresa }
     });
-    // Se já existe, ignora - vai logar depois
-    if (signUpError && !signUpError.message.includes('already registered') && !signUpError.message.includes('already exists')) {
-      console.log('SignUp aviso:', signUpError.message);
+    if (createError && (createError.message.includes('already') || createError.message.includes('exists'))) {
+      const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+      const existingUser = (listData?.users || []).find(u => u.email?.toLowerCase() === emailLimpo);
+      if (existingUser) {
+        await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+          password: senha, email_confirm: true, user_metadata: { nome, empresa }
+        });
+      }
+    } else if (createError) {
+      console.log('createUser aviso:', createError.message);
     }
 
     // 3. Cria/atualiza tenant
